@@ -1,0 +1,15 @@
+Git Installation Instructions for Windows:
+
+1. Download Git from: https://git-scm.com/download/win
+2. Run the installer with default settings
+3. Restart your command prompt/IDE after installation
+4. Then run these commands in the star-api directory:
+
+   git init
+   git remote add origin https://github.com/yassinelaribi245/pfe_backend.git
+   git add .
+   git commit -m "Initial commit: Add Spring Boot backend API project"
+   git branch -M main
+   git push -u origin main
+
+Note: You'll need GitHub credentials (personal access token or username/password) to push.

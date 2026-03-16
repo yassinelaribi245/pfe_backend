@@ -1,0 +1,12 @@
+Run these commands in order after Git is installed:
+
+1. git init
+2. git remote add origin https://github.com/yassinelaribi245/pfe_backend.git
+3. git add .
+4. git commit -m "Initial commit: Add Spring Boot backend API project"
+5. git branch -M main
+6. git push -u origin main
+
+Note: For step 6, you'll need to authenticate with GitHub using:
+- GitHub Personal Access Token (recommended), or
+- Your GitHub username and password
