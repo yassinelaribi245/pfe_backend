@@ -20,6 +20,7 @@ public class OfferRegistrationService {
     private final UserRepository              userRepository;
     private final AssociationMemberRepository memberRepository;
     private final NotificationRepository      notificationRepository;
+    private final ActivityLogService          logService;
 
     // ── Register to an offer (any role) ──────────────────
     @Transactional
@@ -62,12 +63,18 @@ public class OfferRegistrationService {
                 // Full — put back on waitlist
                 prev.setStatus(OfferRegistration.RegistrationStatus.waitlist);
                 registrationRepository.save(prev);
+                logService.log(ActivityLogService.OFFER_WAITLIST, user,
+                    "Offre \"" + offer.getTitle() + "\" (complète)");
                 return OfferRegistrationResponse.from(prev);
             }
 
             // Space available — confirm directly
             prev.setStatus(OfferRegistration.RegistrationStatus.confirmed);
-            return OfferRegistrationResponse.from(registrationRepository.save(prev));
+            OfferRegistrationResponse res =
+                OfferRegistrationResponse.from(registrationRepository.save(prev));
+            logService.log(ActivityLogService.OFFER_REGISTERED, user,
+                "Offre \"" + offer.getTitle() + "\" (ré-inscription confirmée)");
+            return res;
         }
 
         // New registration
@@ -81,12 +88,18 @@ public class OfferRegistrationService {
             // Offer full — add to waitlist
             reg.setStatus(OfferRegistration.RegistrationStatus.waitlist);
             registrationRepository.save(reg);
+            logService.log(ActivityLogService.OFFER_WAITLIST, user,
+                "Offre \"" + offer.getTitle() + "\" (complète — liste d'attente)");
             return OfferRegistrationResponse.from(reg);
         }
 
         // Space available — confirm directly
         reg.setStatus(OfferRegistration.RegistrationStatus.confirmed);
-        return OfferRegistrationResponse.from(registrationRepository.save(reg));
+        OfferRegistrationResponse result =
+            OfferRegistrationResponse.from(registrationRepository.save(reg));
+        logService.log(ActivityLogService.OFFER_REGISTERED, user,
+            "Offre \"" + offer.getTitle() + "\"");
+        return result;
     }
 
     // ── Cancel registration ───────────────────────────────
@@ -116,6 +129,8 @@ public class OfferRegistrationService {
         // Cancel this registration
         reg.setStatus(OfferRegistration.RegistrationStatus.cancelled);
         registrationRepository.save(reg);
+        logService.log(ActivityLogService.OFFER_CANCELLED, user,
+            "Offre \"" + offer.getTitle() + "\"");
 
         // If the cancelled spot was confirmed → promote first waitlisted person
         if (wasConfirmed) {

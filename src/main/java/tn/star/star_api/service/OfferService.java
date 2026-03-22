@@ -1,37 +1,47 @@
 package tn.star.star_api.service;
 
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import tn.star.star_api.dto.OfferRequest;
 import tn.star.star_api.dto.OfferResponse;
 import tn.star.star_api.entity.*;
 import tn.star.star_api.repository.*;
 
-import java.util.List;
-import java.util.UUID;
+import java.io.IOException;
+import java.nio.file.*;
+import java.util.*;
 
 @Service
 @RequiredArgsConstructor
 public class OfferService {
 
-    private final OfferRepository             offerRepository;
-    private final OfferCategoryRepository     categoryRepository;
-    private final AssociationMemberRepository memberRepository;
-    private final UserRepository              userRepository;
+    private final OfferRepository                offerRepository;
+    private final OfferCategoryRepository        categoryRepository;
+    private final AssociationMemberRepository    memberRepository;
+    private final UserRepository                 userRepository;
+    private final OfferRegistrationRepository    registrationRepository;
+    private final ActivityLogService             logService;
 
-    // ── Get all offers ────────────────────────────────────
+    @Value("${app.upload.dir:uploads/offers}")
+    private String uploadDir;
+
+    // ── Get all offers — newest first ─────────────────────
     public List<OfferResponse> getAllOffers() {
-        return offerRepository.findAll()
+        return offerRepository
+                .findAll(Sort.by(Sort.Direction.DESC, "createdAt"))
                 .stream()
                 .map(OfferResponse::from)
                 .toList();
     }
 
-    // ── Get offers by status ──────────────────────────────
+    // ── Get offers by status — newest first ───────────────
     public List<OfferResponse> getOffersByStatus(String status) {
         try {
             Offer.OfferStatus s = Offer.OfferStatus.valueOf(status);
-            return offerRepository.findByStatus(s)
+            return offerRepository
+                    .findByStatus(s, Sort.by(Sort.Direction.DESC, "createdAt"))
                     .stream().map(OfferResponse::from).toList();
         } catch (IllegalArgumentException e) {
             throw new RuntimeException("Statut invalide : " + status
@@ -45,17 +55,16 @@ public class OfferService {
                 .orElseThrow(() -> new RuntimeException("Offre introuvable")));
     }
 
-    // ── Get my offers (association member) ────────────────
+    // ── Get my offers — newest first ──────────────────────
     public List<OfferResponse> getMyOffers(String email) {
         User user = userRepository.findByEmail(email)
                 .orElseThrow(() -> new RuntimeException("Utilisateur introuvable"));
         AssociationMember member = memberRepository.findByUserId(user.getId())
                 .orElseThrow(() -> new RuntimeException(
                     "Seuls les membres association ont des offres"));
-        // Returns ALL offers for this member's category
-        // including those created by admin on their behalf
-        // The response will clearly show createdByAdmin when applicable
-        return offerRepository.findByCreatedById(member.getId())
+        return offerRepository
+                .findByCreatedById(member.getId(),
+                    Sort.by(Sort.Direction.DESC, "createdAt"))
                 .stream().map(OfferResponse::from).toList();
     }
 
@@ -118,7 +127,51 @@ public class OfferService {
             offer.setCreatedByAdmin(null);
         }
 
-        return OfferResponse.from(offerRepository.save(offer));
+        // Save offer first to get the ID
+        Offer saved = offerRepository.save(offer);
+        String offerId = saved.getId().toString();
+
+        // Move images from temp folder to offer's own folder
+        if (req.getCoverImage() != null) {
+            String movedCover = moveImageToOfferFolder(
+                req.getCoverImage(), offerId);
+            saved.setCoverImage(movedCover);
+        }
+        if (req.getImages() != null && !req.getImages().isEmpty()) {
+            try {
+                List<String> movedImages = req.getImages().stream()
+                    .map(url -> moveImageToOfferFolder(url, offerId))
+                    .collect(java.util.stream.Collectors.toList());
+                saved.setImages(new com.fasterxml.jackson.databind
+                    .ObjectMapper().writeValueAsString(movedImages));
+            } catch (Exception ignored) {}
+        }
+
+        OfferResponse result = OfferResponse.from(offerRepository.save(saved));
+        // Log the creation
+        logService.log(ActivityLogService.OFFER_CREATED, user,
+            "Offre \"" + saved.getTitle() + "\" — catégorie: "
+            + saved.getCategory().getName());
+        return result;
+    }
+
+    // Move an image from temp/xxx.jpg → {offerId}/xxx.jpg
+    private String moveImageToOfferFolder(String url, String offerId) {
+        try {
+            // url is like /api/images/temp/filename.ext
+            String[] parts = url.split("/");
+            String filename = parts[parts.length - 1];
+            java.nio.file.Path src  = java.nio.file.Paths.get(
+                "uploads/offers", "temp", filename).toAbsolutePath();
+            java.nio.file.Path dest = java.nio.file.Paths.get(
+                "uploads/offers", offerId).toAbsolutePath();
+            java.nio.file.Files.createDirectories(dest);
+            java.nio.file.Files.move(src, dest.resolve(filename),
+                java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+            return "/api/images/" + offerId + "/" + filename;
+        } catch (Exception e) {
+            return url; // keep original if move fails
+        }
     }
 
     // ── Update offer ──────────────────────────────────────
@@ -163,26 +216,76 @@ public class OfferService {
         offer.setDocumentNeeded(req.getDocumentNeeded());
         offer.setPaymentMethod(req.getPaymentMethod());
 
-        return OfferResponse.from(offerRepository.save(offer));
+        String offerId = offer.getId().toString();
+        if (req.getCoverImage() != null) {
+            offer.setCoverImage(
+                moveImageToOfferFolder(req.getCoverImage(), offerId));
+        }
+        if (req.getImages() != null) {
+            try {
+                List<String> movedImages = req.getImages().stream()
+                    .map(url -> moveImageToOfferFolder(url, offerId))
+                    .collect(java.util.stream.Collectors.toList());
+                offer.setImages(new com.fasterxml.jackson.databind
+                    .ObjectMapper().writeValueAsString(movedImages));
+            } catch (Exception ignored) {}
+        }
+
+        OfferResponse updated = OfferResponse.from(offerRepository.save(offer));
+        logService.log(ActivityLogService.OFFER_UPDATED, user,
+            "Offre \"" + offer.getTitle() + "\"");
+        return updated;
     }
 
-    // ── Change status (admin only) ────────────────────────
-    public OfferResponse changeStatus(UUID id, String status) {
+    // ── Change status ─────────────────────────────────────
+    public OfferResponse changeStatus(UUID id, String status, String email) {
         Offer offer = offerRepository.findById(id)
                 .orElseThrow(() -> new RuntimeException("Offre introuvable"));
+        String oldStatus = offer.getStatus().name();
         try {
             offer.setStatus(Offer.OfferStatus.valueOf(status));
         } catch (IllegalArgumentException e) {
             throw new RuntimeException("Statut invalide : " + status);
         }
-        return OfferResponse.from(offerRepository.save(offer));
+        OfferResponse result = OfferResponse.from(offerRepository.save(offer));
+        User user = userRepository.findByEmail(email).orElse(null);
+        logService.log(ActivityLogService.OFFER_STATUS, user,
+            "\"" + offer.getTitle() + "\" : "
+            + oldStatus + " → " + status);
+        return result;
     }
 
-    // ── Delete offer (admin only) ─────────────────────────
-    public void deleteOffer(UUID id) {
-        if (!offerRepository.existsById(id)) {
-            throw new RuntimeException("Offre introuvable");
-        }
+    // ── Delete offer + registrations + images ─────────────
+    public void deleteOffer(UUID id, String email) {
+        Offer offer = offerRepository.findById(id)
+                .orElseThrow(() -> new RuntimeException("Offre introuvable"));
+        String title    = offer.getTitle();
+        String category = offer.getCategory() != null
+            ? offer.getCategory().getName() : "";
+        // Delete registrations first
+        registrationRepository.deleteByOfferId(id);
+        // Delete offer
         offerRepository.deleteById(id);
+        // Delete image folder
+        deleteOfferImageFolder(id.toString());
+        // Log with real user
+        User user = userRepository.findByEmail(email).orElse(null);
+        logService.log(ActivityLogService.OFFER_DELETED, user,
+            "\"" + title + "\" — catégorie: " + category);
+    }
+
+    private void deleteOfferImageFolder(String offerId) {
+        try {
+            Path offerImgPath = Paths.get(uploadDir, offerId)
+                .toAbsolutePath().normalize();
+            if (Files.exists(offerImgPath)) {
+                Files.walk(offerImgPath)
+                    .sorted(Comparator.reverseOrder())
+                    .forEach(p -> {
+                        try { Files.delete(p); }
+                        catch (IOException ignored) {}
+                    });
+            }
+        } catch (Exception ignored) {}
     }
 }

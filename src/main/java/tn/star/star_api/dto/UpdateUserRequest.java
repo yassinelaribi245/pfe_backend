@@ -3,6 +3,7 @@ package tn.star.star_api.dto;
 import jakarta.validation.constraints.*;
 import lombok.Data;
 import tn.star.star_api.entity.User;
+import java.math.BigDecimal;
 
 @Data
 public class UpdateUserRequest {
@@ -15,10 +16,12 @@ public class UpdateUserRequest {
     @Pattern(regexp = "^[a-zA-ZÀ-ÿ\\s'-]+$", message = "Le nom contient des caractères invalides")
     private String lastName;
 
-    @Pattern(regexp = "^[+0-9\\s()-]{7,20}$",
-             message = "Numéro de téléphone invalide")
+    @Pattern(regexp = "^[+0-9\\s()-]{7,20}$", message = "Numéro de téléphone invalide")
     private String phone;
 
     private User.UserRole role;
     private User.UserStatus status;
+
+    @DecimalMin(value = "0.0", message = "Les points ne peuvent pas être négatifs")
+    private BigDecimal credit;
 }

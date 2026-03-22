@@ -21,13 +21,18 @@ public class GlobalExceptionHandler {
         List<String> errors = ex.getBindingResult()
                 .getFieldErrors()
                 .stream()
-                .map(e -> e.getField() + " : " + e.getDefaultMessage())
+                .map(e -> e.getDefaultMessage()) // just the message, no field prefix
                 .toList();
+
+        // Use the first error as the main message so Flutter shows it directly
+        String mainMessage = errors.isEmpty()
+                ? "Données invalides"
+                : errors.get(0);
 
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("success",   false);
         body.put("status",    400);
-        body.put("message",   "Données invalides");
+        body.put("message",   mainMessage);   // ← Flutter reads this
         body.put("errors",    errors);
         body.put("timestamp", OffsetDateTime.now().toString());
         return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(body);

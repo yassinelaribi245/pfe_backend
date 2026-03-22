@@ -1,9 +1,8 @@
 package tn.star.star_api.entity;
 
 import jakarta.persistence.*;
-import lombok.Data;
-import lombok.NoArgsConstructor;
-import lombok.AllArgsConstructor;
+import lombok.*;
+import org.hibernate.annotations.CreationTimestamp;
 import java.time.OffsetDateTime;
 import java.util.UUID;
 
@@ -11,17 +10,16 @@ import java.util.UUID;
 @Table(name = "activity_logs")
 @Data
 @NoArgsConstructor
-@AllArgsConstructor
 public class ActivityLog {
 
     @Id
-    @GeneratedValue(strategy = GenerationType.UUID)
+    @GeneratedValue
     private UUID id;
 
     @Column(nullable = false, length = 100)
     private String action;
 
-    @ManyToOne
+    @ManyToOne(fetch = FetchType.EAGER)
     @JoinColumn(name = "performed_by")
     private User performedBy;
 
@@ -31,12 +29,13 @@ public class ActivityLog {
     @Column(name = "target_id")
     private UUID targetId;
 
-    @Column(columnDefinition = "TEXT")
+    @Column(name = "details", columnDefinition = "TEXT")
     private String details;
 
     @Column(name = "ip_address", length = 45)
     private String ipAddress;
 
+    @CreationTimestamp
     @Column(name = "created_at", updatable = false)
-    private OffsetDateTime createdAt = OffsetDateTime.now();
+    private OffsetDateTime createdAt;
 }

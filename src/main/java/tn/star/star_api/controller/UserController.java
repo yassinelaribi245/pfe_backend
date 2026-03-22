@@ -32,14 +32,32 @@ public class UserController {
     }
 
     @PostMapping
-    public ResponseEntity<?> createUser(@Valid @RequestBody CreateUserRequest req) {
+    public ResponseEntity<?> createUser(
+            @Valid @RequestBody CreateUserRequest req) {
         return ResponseEntity.ok(userService.createUser(req));
     }
 
     @PutMapping("/{id}")
     public ResponseEntity<?> updateUser(@PathVariable UUID id,
-                                        @Valid @RequestBody UpdateUserRequest req) {
+            @Valid @RequestBody UpdateUserRequest req) {
         return ResponseEntity.ok(userService.updateUser(id, req));
+    }
+
+    // PATCH /api/users/{id}/points — update points only
+    @PatchMapping("/{id}/points")
+    public ResponseEntity<?> updatePoints(@PathVariable UUID id,
+            @RequestBody java.util.Map<String, Object> body) {
+        var req = new UpdateUserRequest();
+        if (body.get("credit") != null) {
+            req.setCredit(new java.math.BigDecimal(body.get("credit").toString()));
+        }
+        return ResponseEntity.ok(userService.updateUser(id, req));
+    }
+
+    @PatchMapping("/{id}/role")
+    public ResponseEntity<?> changeRole(@PathVariable UUID id,
+            @Valid @RequestBody ChangeRoleRequest req) {
+        return ResponseEntity.ok(userService.changeRole(id, req));
     }
 
     @DeleteMapping("/{id}")
@@ -50,7 +68,7 @@ public class UserController {
 
     @PutMapping("/me/password")
     public ResponseEntity<?> changePassword(Authentication auth,
-                                            @Valid @RequestBody ChangePasswordRequest req) {
+            @Valid @RequestBody ChangePasswordRequest req) {
         userService.changePassword(auth.getName(), req);
         return ResponseEntity.ok("Mot de passe modifié avec succès");
     }

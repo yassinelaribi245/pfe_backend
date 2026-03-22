@@ -50,6 +50,13 @@ public class Offer {
     @Column(name = "payment_method", length = 100)
     private String paymentMethod = "free";
 
+    // ── Images ────────────────────────────────────────────────
+    @Column(name = "cover_image", length = 500)
+    private String coverImage; // URL of cover image
+
+    @Column(name = "images", columnDefinition = "TEXT")
+    private String images; // JSON array: ["/api/images/uuid1.jpg", ...]
+
     @Enumerated(EnumType.STRING)
     @JdbcTypeCode(SqlTypes.NAMED_ENUM)
     @Column(nullable = false)

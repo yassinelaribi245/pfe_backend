@@ -3,13 +3,14 @@ package tn.star.star_api.dto;
 import jakarta.validation.constraints.*;
 import lombok.Data;
 import java.math.BigDecimal;
+import java.util.List;
 import java.time.LocalDate;
 
 @Data
 public class OfferRequest {
 
     @NotBlank(message = "Le titre est obligatoire")
-    @Size(min = 3, max = 200, message = "Le titre doit contenir entre 3 et 200 caractères")
+    @Size(min = 2, max = 200, message = "Le titre doit contenir entre 2 et 200 caractères")
     private String title;
 
     @NotBlank(message = "La description est obligatoire")
@@ -37,4 +38,7 @@ public class OfferRequest {
 
     @NotBlank(message = "Le mode de paiement est obligatoire")
     private String paymentMethod;
+
+    private String coverImage;  // URL after upload
+    private List<String> images; // list of URLs after upload
 }
