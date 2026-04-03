@@ -6,6 +6,7 @@ import org.springframework.transaction.annotation.Transactional;
 import tn.star.star_api.dto.OfferRegistrationResponse;
 import tn.star.star_api.entity.*;
 import tn.star.star_api.repository.*;
+import tn.star.star_api.service.PaymentService;
 
 import java.time.OffsetDateTime;
 import java.util.List;
@@ -20,11 +21,12 @@ public class OfferRegistrationService {
     private final UserRepository              userRepository;
     private final AssociationMemberRepository memberRepository;
     private final NotificationRepository      notificationRepository;
+    private final OfferPaymentRepository      paymentRepository;
     private final ActivityLogService          logService;
 
     // ── Register to an offer (any role) ──────────────────
     @Transactional
-    public OfferRegistrationResponse register(UUID offerId, String email) {
+    public OfferRegistrationResponse register(UUID offerId, String email, String chosenPaymentMethod) {
 
         User user = userRepository.findByEmail(email)
                 .orElseThrow(() -> new RuntimeException("Utilisateur introuvable"));
@@ -32,10 +34,11 @@ public class OfferRegistrationService {
         Offer offer = offerRepository.findById(offerId)
                 .orElseThrow(() -> new RuntimeException("Offre introuvable"));
 
-        // Check offer is active
-        if (offer.getStatus() != Offer.OfferStatus.active) {
+        // Check offer allows registration
+        boolean isFermer = offer.getStatus() == Offer.OfferStatus.fermer;
+        if (offer.getStatus() != Offer.OfferStatus.active && !isFermer) {
             throw new RuntimeException(
-                "Impossible de s'inscrire — l'offre n'est pas active");
+                "Impossible de s'inscrire — l'offre n'est plus ouverte");
         }
 
         // Check if user already has a registration
@@ -69,6 +72,7 @@ public class OfferRegistrationService {
             }
 
             // Space available — confirm directly
+            prev.setChosenPaymentMethod(chosenPaymentMethod);
             prev.setStatus(OfferRegistration.RegistrationStatus.confirmed);
             OfferRegistrationResponse res =
                 OfferRegistrationResponse.from(registrationRepository.save(prev));
@@ -82,6 +86,30 @@ public class OfferRegistrationService {
         OfferRegistration reg = new OfferRegistration();
         reg.setUser(user);
         reg.setOffer(offer);
+        reg.setChosenPaymentMethod(chosenPaymentMethod);
+
+        // If offer is fermer → straight to waitlist regardless of capacity
+        if (isFermer) {
+            reg.setStatus(OfferRegistration.RegistrationStatus.waitlist);
+            registrationRepository.save(reg);
+            logService.log(ActivityLogService.OFFER_WAITLIST, user,
+                "Offre \"" + offer.getTitle() + "\" (fermée — liste d'attente)");
+            return OfferRegistrationResponse.from(reg);
+        }
+
+        // Check if user has overdue payments — route to pending_approval
+        boolean hasOverdue = paymentRepository.userHasOverduePayments(user.getId());
+        if (hasOverdue) {
+            reg.setStatus(OfferRegistration.RegistrationStatus.pending_approval);
+            registrationRepository.save(reg);
+
+            // Notify the responsible member
+            notifyMemberPendingApproval(offer, user);
+
+            logService.log(ActivityLogService.OFFER_REGISTERED, user,
+                "Offre \"" + offer.getTitle() + "\" (en attente — paiement en retard)");
+            return OfferRegistrationResponse.from(reg);
+        }
 
         if (offer.getMaxParticipants() > 0
                 && confirmed >= offer.getMaxParticipants()) {
@@ -99,6 +127,16 @@ public class OfferRegistrationService {
             OfferRegistrationResponse.from(registrationRepository.save(reg));
         logService.log(ActivityLogService.OFFER_REGISTERED, user,
             "Offre \"" + offer.getTitle() + "\"");
+
+        // Check if offer just became full → set to fermer automatically
+        long newConfirmed = countConfirmed(offerId);
+        if (offer.getMaxParticipants() > 0
+                && newConfirmed >= offer.getMaxParticipants()) {
+            offer.setStatus(Offer.OfferStatus.fermer);
+            offerRepository.save(offer);
+            logService.log(ActivityLogService.OFFER_STATUS, user,
+                "Offre \"" + offer.getTitle() + "\" : active → fermer (places complètes)");
+        }
         return result;
     }
 
@@ -164,6 +202,21 @@ public class OfferRegistrationService {
                 });
     }
 
+    // ── Notify member of pending approval request ────────
+    private void notifyMemberPendingApproval(Offer offer, User user) {
+        // Find the responsible member for this offer's category
+        if (offer.getCreatedBy() == null) return;
+        User memberUser = offer.getCreatedBy().getUser();
+        Notification notif = new Notification();
+        notif.setUser(memberUser);
+        notif.setTitle("⚠️ Demande d'inscription en attente");
+        notif.setBody(user.getName() + " " + user.getLastName()
+            + " souhaite s'inscrire à l'offre \"" + offer.getTitle()
+            + "\" mais a un paiement en retard. Consultez la liste des inscrits pour approuver ou refuser.");
+        notif.setType(Notification.NotifType.payment);
+        notificationRepository.save(notif);
+    }
+
     // ── Count confirmed registrations for an offer ────────
     private long countConfirmed(UUID offerId) {
         return registrationRepository.findByOfferId(offerId)
@@ -199,12 +252,12 @@ public class OfferRegistrationService {
                        || user.getRole() == User.UserRole.super_admin;
 
         if (!isAdmin) {
-            AssociationMember member = memberRepository
-                    .findByUserId(user.getId())
-                    .orElseThrow(() -> new RuntimeException("Accès refusé"));
-
-            if (!member.getCategory().getId()
-                       .equals(offer.getCategory().getId())) {
+            // Member can see registrations if any of their categories matches
+            boolean hasAccess = memberRepository.findByUserId(user.getId())
+                    .stream()
+                    .anyMatch(m -> m.getCategory().getId()
+                                   .equals(offer.getCategory().getId()));
+            if (!hasAccess) {
                 throw new RuntimeException(
                     "Vous ne pouvez voir que les inscriptions de vos offres");
             }

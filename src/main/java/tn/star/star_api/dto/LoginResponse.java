@@ -2,6 +2,7 @@ package tn.star.star_api.dto;
 
 import lombok.AllArgsConstructor;
 import lombok.Data;
+import java.util.UUID;
 
 @Data
 @AllArgsConstructor
@@ -10,4 +11,5 @@ public class LoginResponse {
     private String email;
     private String name;
     private String role;
+    private UUID   userId;   // added — AppSession needs this
 }

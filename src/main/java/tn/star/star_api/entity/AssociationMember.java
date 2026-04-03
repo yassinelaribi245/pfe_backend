@@ -18,13 +18,14 @@ public class AssociationMember {
     @GeneratedValue(strategy = GenerationType.UUID)
     private UUID id;
 
-    @OneToOne
-    @JoinColumn(name = "user_id", nullable = false, unique = true)
+    // Multiple members can share the same category (up to 4 per category)
+    // One user can also manage multiple categories
+    @ManyToOne
+    @JoinColumn(name = "user_id", nullable = false)
     private User user;
 
-    // Each member has one unique category — no duplicates allowed
     @ManyToOne
-    @JoinColumn(name = "category_id", nullable = false, unique = true)
+    @JoinColumn(name = "category_id", nullable = false)
     private OfferCategory category;
 
     @Column(name = "created_at", updatable = false)

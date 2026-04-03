@@ -32,7 +32,7 @@ public class User {
 
     @Enumerated(EnumType.STRING)
     @JdbcTypeCode(SqlTypes.NAMED_ENUM)
-    @Column(nullable = false)
+    @Column(nullable = false, columnDefinition = "user_role")
     private UserRole role = UserRole.collaborator;
 
     @Column(length = 20)
@@ -46,7 +46,7 @@ public class User {
 
     @Enumerated(EnumType.STRING)
     @JdbcTypeCode(SqlTypes.NAMED_ENUM)
-    @Column(nullable = false)
+    @Column(nullable = false, columnDefinition = "user_status")
     private UserStatus status = UserStatus.active;
 
     @Column(name = "black_listed", nullable = false)

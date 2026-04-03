@@ -60,6 +60,16 @@ public class UserController {
         return ResponseEntity.ok(userService.changeRole(id, req));
     }
 
+    // PATCH /api/users/{id}/responsibilities
+    // Adds additional category responsibilities to an existing member
+    // without changing their role
+    @PatchMapping("/{id}/responsibilities")
+    public ResponseEntity<?> addResponsibilities(@PathVariable UUID id,
+            @RequestBody java.util.Map<String, Object> body) {
+        return ResponseEntity.ok(
+            userService.addResponsibilities(id, body));
+    }
+
     @DeleteMapping("/{id}")
     public ResponseEntity<?> deleteUser(@PathVariable UUID id) {
         userService.deleteUser(id);

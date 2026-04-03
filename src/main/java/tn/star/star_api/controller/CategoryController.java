@@ -16,34 +16,61 @@ import java.util.Map;
 @RequiredArgsConstructor
 public class CategoryController {
 
-    private final OfferCategoryRepository    categoryRepository;
+    private final OfferCategoryRepository     categoryRepository;
     private final AssociationMemberRepository memberRepository;
 
-    // GET /api/categories — all 12 categories with assignment status
+    // GET /api/categories — all categories with member count
     @GetMapping
     public ResponseEntity<?> getAllCategories() {
         List<OfferCategory> all = categoryRepository.findAll();
         return ResponseEntity.ok(all.stream().map(c -> {
+            long count = memberRepository.countByCategoryId(c.getId());
             Map<String, Object> map = new LinkedHashMap<>();
-            map.put("id",       c.getId());
-            map.put("name",     c.getName());
+            map.put("id",          c.getId());
+            map.put("name",        c.getName());
             map.put("description", c.getDescription());
-            map.put("assigned", memberRepository.existsByCategoryId(c.getId()));
+            map.put("memberCount", count);
+            // "assigned" stays for backward compat — true if at least 1 member
+            map.put("assigned",    count > 0);
+            // "full" = 4 members — admin UI can show this
+            map.put("full",        count >= 4);
             return map;
         }).toList());
     }
 
-    // GET /api/categories/free — only categories without a member
+    // GET /api/categories/free — categories with fewer than 4 members
+    // Kept for backward compat but now returns ALL categories
+    // (admin can assign to any category regardless)
     @GetMapping("/free")
     public ResponseEntity<?> getFreeCategories() {
         List<OfferCategory> all = categoryRepository.findAll();
-        return ResponseEntity.ok(all.stream()
-                .filter(c -> !memberRepository.existsByCategoryId(c.getId()))
-                .map(c -> {
-                    Map<String, Object> map = new LinkedHashMap<>();
-                    map.put("id",   c.getId());
-                    map.put("name", c.getName());
-                    return map;
-                }).toList());
+        return ResponseEntity.ok(all.stream().map(c -> {
+            long count = memberRepository.countByCategoryId(c.getId());
+            Map<String, Object> map = new LinkedHashMap<>();
+            map.put("id",          c.getId());
+            map.put("name",        c.getName());
+            map.put("memberCount", count);
+            map.put("full",        count >= 4);
+            return map;
+        }).toList());
+    }
+
+    // POST /api/categories — admin creates a new category
+    @PostMapping
+    public ResponseEntity<?> createCategory(
+            @RequestBody Map<String, String> body) {
+        String name = body.get("name");
+        if (name == null || name.isBlank()) {
+            return ResponseEntity.badRequest().body(
+                Map.of("message", "Le nom de la catégorie est obligatoire"));
+        }
+        OfferCategory cat = new OfferCategory();
+        cat.setName(name.trim());
+        cat.setDescription(body.get("description"));
+        OfferCategory saved = categoryRepository.save(cat);
+        return ResponseEntity.ok(Map.of(
+            "id",   saved.getId(),
+            "name", saved.getName()
+        ));
     }
 }

@@ -32,7 +32,7 @@ public class Notification {
 
     @Enumerated(EnumType.STRING)
     @JdbcTypeCode(SqlTypes.NAMED_ENUM)
-    @Column(nullable = false)
+    @Column(nullable = false, columnDefinition = "notif_type")
     private NotifType type = NotifType.system;
 
     @Column(name = "is_read", nullable = false)
@@ -42,6 +42,6 @@ public class Notification {
     private OffsetDateTime createdAt = OffsetDateTime.now();
 
     public enum NotifType {
-        offer, survey, election, system, candidacy
+        offer, survey, election, system, candidacy, payment
     }
 }

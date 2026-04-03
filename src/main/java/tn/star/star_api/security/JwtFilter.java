@@ -5,11 +5,15 @@ import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
+import tn.star.star_api.security.JwtUtil;
+
 import java.io.IOException;
 import java.util.List;
 
@@ -17,6 +21,7 @@ import java.util.List;
 @RequiredArgsConstructor
 public class JwtFilter extends OncePerRequestFilter {
 
+    private static final Logger log = LoggerFactory.getLogger(JwtFilter.class);
     private final JwtUtil jwtUtil;
 
     @Override
@@ -34,8 +39,7 @@ public class JwtFilter extends OncePerRequestFilter {
                     String email = jwtUtil.extractEmail(token);
                     String role  = jwtUtil.extractRole(token);
 
-                    // Log for debugging
-                    System.out.println("JWT OK — email: " + email + " role: " + role);
+                    log.debug("JWT OK — email: {} role: {}", email, role);
 
                     UsernamePasswordAuthenticationToken authentication =
                         new UsernamePasswordAuthenticationToken(
@@ -43,15 +47,14 @@ public class JwtFilter extends OncePerRequestFilter {
                             null,
                             List.of(new SimpleGrantedAuthority(role))
                         );
-                    SecurityContextHolder.getContext().setAuthentication(authentication);
+                    SecurityContextHolder.getContext()
+                        .setAuthentication(authentication);
                 } else {
-                    System.out.println("JWT invalid");
+                    log.debug("JWT invalid — token rejected");
                 }
             } catch (Exception e) {
-                System.out.println("JWT error: " + e.getMessage());
+                log.debug("JWT parse error: {}", e.getMessage());
             }
-        } else {
-            System.out.println("No Authorization header found");
         }
 
         filterChain.doFilter(request, response);

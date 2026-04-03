@@ -41,7 +41,7 @@ public class CandidateApplication {
 
     @Enumerated(EnumType.STRING)
     @JdbcTypeCode(SqlTypes.NAMED_ENUM)
-    @Column(nullable = false)
+    @Column(nullable = false, columnDefinition = "candidacy_status")
     private CandidacyStatus status = CandidacyStatus.pending;
 
     @Column(name = "submitted_at", updatable = false)

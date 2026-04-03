@@ -8,10 +8,10 @@ import tn.star.star_api.dto.OfferRequest;
 import tn.star.star_api.dto.OfferResponse;
 import tn.star.star_api.entity.*;
 import tn.star.star_api.repository.*;
+import org.springframework.context.annotation.Lazy;
 
-import java.io.IOException;
-import java.nio.file.*;
 import java.util.*;
+import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
@@ -23,9 +23,8 @@ public class OfferService {
     private final UserRepository                 userRepository;
     private final OfferRegistrationRepository    registrationRepository;
     private final ActivityLogService             logService;
-
-    @Value("${app.upload.dir:uploads/offers}")
-    private String uploadDir;
+    @Lazy
+    private final PaymentService                 paymentService;
 
     // ── Get all offers — newest first ─────────────────────
     public List<OfferResponse> getAllOffers() {
@@ -59,13 +58,17 @@ public class OfferService {
     public List<OfferResponse> getMyOffers(String email) {
         User user = userRepository.findByEmail(email)
                 .orElseThrow(() -> new RuntimeException("Utilisateur introuvable"));
-        AssociationMember member = memberRepository.findByUserId(user.getId())
-                .orElseThrow(() -> new RuntimeException(
-                    "Seuls les membres association ont des offres"));
-        return offerRepository
-                .findByCreatedById(member.getId(),
-                    Sort.by(Sort.Direction.DESC, "createdAt"))
-                .stream().map(OfferResponse::from).toList();
+        // A user can have multiple memberships — collect all offer IDs
+        List<AssociationMember> memberships = memberRepository.findByUserId(user.getId());
+        if (memberships.isEmpty()) {
+            throw new RuntimeException("Seuls les membres association ont des offres");
+        }
+        return memberships.stream()
+            .flatMap(m -> offerRepository.findByCreatedById(m.getId(),
+                Sort.by(Sort.Direction.DESC, "createdAt")).stream())
+            .distinct()
+            .map(OfferResponse::from)
+            .toList();
     }
 
     // ── Create offer ──────────────────────────────────────
@@ -94,6 +97,7 @@ public class OfferService {
         offer.setPrice(req.getPrice());
         offer.setDocumentNeeded(req.getDocumentNeeded());
         offer.setPaymentMethod(req.getPaymentMethod());
+        saveAllowedMethods(offer, req.getAllowedPaymentMethods(), req.getPaymentMethod());
         offer.setStatus(Offer.OfferStatus.active);
 
         boolean isAdmin = user.getRole() == User.UserRole.admin
@@ -107,8 +111,9 @@ public class OfferService {
             }
 
             // Find the member responsible for this category
+            // Pick the first available member for this category
             AssociationMember member = memberRepository
-                    .findByCategoryId(req.getCategoryId())
+                    .findFirstByCategoryId(req.getCategoryId())
                     .orElseThrow(() -> new RuntimeException(
                         "Aucun membre association n'est responsable de cette catégorie"));
 
@@ -118,34 +123,21 @@ public class OfferService {
 
         } else {
             // Association member — category auto from their profile
-            AssociationMember member = memberRepository.findByUserId(user.getId())
-                    .orElseThrow(() -> new RuntimeException(
-                        "Seuls les membres association peuvent créer des offres"));
+            List<AssociationMember> memberships = memberRepository.findByUserId(user.getId());
+            if (memberships.isEmpty()) {
+                throw new RuntimeException("Seuls les membres association peuvent créer des offres");
+            }
+            // Use the first membership (member can have multiple categories)
+            AssociationMember member = memberships.get(0);
 
             offer.setCategory(member.getCategory());
             offer.setCreatedBy(member);
             offer.setCreatedByAdmin(null);
         }
 
-        // Save offer first to get the ID
+        // Save offer to get ID, then persist images into DB
         Offer saved = offerRepository.save(offer);
-        String offerId = saved.getId().toString();
-
-        // Move images from temp folder to offer's own folder
-        if (req.getCoverImage() != null) {
-            String movedCover = moveImageToOfferFolder(
-                req.getCoverImage(), offerId);
-            saved.setCoverImage(movedCover);
-        }
-        if (req.getImages() != null && !req.getImages().isEmpty()) {
-            try {
-                List<String> movedImages = req.getImages().stream()
-                    .map(url -> moveImageToOfferFolder(url, offerId))
-                    .collect(java.util.stream.Collectors.toList());
-                saved.setImages(new com.fasterxml.jackson.databind
-                    .ObjectMapper().writeValueAsString(movedImages));
-            } catch (Exception ignored) {}
-        }
+        saveImagesToOffer(saved, req.getCoverImage(), req.getImages());
 
         OfferResponse result = OfferResponse.from(offerRepository.save(saved));
         // Log the creation
@@ -155,22 +147,40 @@ public class OfferService {
         return result;
     }
 
-    // Move an image from temp/xxx.jpg → {offerId}/xxx.jpg
-    private String moveImageToOfferFolder(String url, String offerId) {
+    // ── Save images into DB fields ────────────────────────
+    private void saveImagesToOffer(Offer offer,
+            String coverB64, List<String> galleryB64List) {
+        var mapper = new com.fasterxml.jackson.databind.ObjectMapper();
         try {
-            // url is like /api/images/temp/filename.ext
-            String[] parts = url.split("/");
-            String filename = parts[parts.length - 1];
-            java.nio.file.Path src  = java.nio.file.Paths.get(
-                "uploads/offers", "temp", filename).toAbsolutePath();
-            java.nio.file.Path dest = java.nio.file.Paths.get(
-                "uploads/offers", offerId).toAbsolutePath();
-            java.nio.file.Files.createDirectories(dest);
-            java.nio.file.Files.move(src, dest.resolve(filename),
-                java.nio.file.StandardCopyOption.REPLACE_EXISTING);
-            return "/api/images/" + offerId + "/" + filename;
+            // Cover image
+            if (coverB64 != null && !coverB64.isEmpty()) {
+                String raw  = coverB64.contains(",")
+                    ? coverB64.split(",")[1] : coverB64;
+                String type = coverB64.startsWith("data:")
+                    ? coverB64.split(";")[0].substring(5)
+                    : "image/jpeg";
+                offer.setCoverImage(
+                    java.util.Base64.getDecoder().decode(raw));
+                offer.setCoverImageType(type);
+            }
+            // Gallery — store each as base64 string in JSON array
+            if (galleryB64List != null && !galleryB64List.isEmpty()) {
+                List<String> dataList  = new java.util.ArrayList<>();
+                List<String> typeList  = new java.util.ArrayList<>();
+                for (String b64 : galleryB64List) {
+                    String raw  = b64.contains(",")
+                        ? b64.split(",")[1] : b64;
+                    String type = b64.startsWith("data:")
+                        ? b64.split(";")[0].substring(5)
+                        : "image/jpeg";
+                    dataList.add(raw);
+                    typeList.add(type);
+                }
+                offer.setImages(mapper.writeValueAsString(dataList));
+                offer.setImagesTypes(mapper.writeValueAsString(typeList));
+            }
         } catch (Exception e) {
-            return url; // keep original if move fails
+            System.err.println("Image save error: " + e.getMessage());
         }
     }
 
@@ -191,9 +201,9 @@ public class OfferService {
         boolean isMemberOfCategory = false;
         if (user.getRole() == User.UserRole.association_member) {
             isMemberOfCategory = memberRepository.findByUserId(user.getId())
-                .map(m -> m.getCategory().getId()
-                            .equals(offer.getCategory().getId()))
-                .orElse(false);
+                .stream()
+                .anyMatch(m -> m.getCategory().getId()
+                            .equals(offer.getCategory().getId()));
         }
 
         if (!isAdmin && !isMemberOfCategory) {
@@ -215,20 +225,11 @@ public class OfferService {
         offer.setPrice(req.getPrice());
         offer.setDocumentNeeded(req.getDocumentNeeded());
         offer.setPaymentMethod(req.getPaymentMethod());
+        saveAllowedMethods(offer, req.getAllowedPaymentMethods(), req.getPaymentMethod());
 
-        String offerId = offer.getId().toString();
-        if (req.getCoverImage() != null) {
-            offer.setCoverImage(
-                moveImageToOfferFolder(req.getCoverImage(), offerId));
-        }
-        if (req.getImages() != null) {
-            try {
-                List<String> movedImages = req.getImages().stream()
-                    .map(url -> moveImageToOfferFolder(url, offerId))
-                    .collect(java.util.stream.Collectors.toList());
-                offer.setImages(new com.fasterxml.jackson.databind
-                    .ObjectMapper().writeValueAsString(movedImages));
-            } catch (Exception ignored) {}
+        // Update images if new ones provided
+        if (req.getCoverImage() != null || req.getImages() != null) {
+            saveImagesToOffer(offer, req.getCoverImage(), req.getImages());
         }
 
         OfferResponse updated = OfferResponse.from(offerRepository.save(offer));
@@ -242,17 +243,53 @@ public class OfferService {
         Offer offer = offerRepository.findById(id)
                 .orElseThrow(() -> new RuntimeException("Offre introuvable"));
         String oldStatus = offer.getStatus().name();
+        Offer.OfferStatus newStatus;
         try {
-            offer.setStatus(Offer.OfferStatus.valueOf(status));
+            newStatus = Offer.OfferStatus.valueOf(status);
         } catch (IllegalArgumentException e) {
-            throw new RuntimeException("Statut invalide : " + status);
+            throw new RuntimeException("Statut invalide : " + status
+                + ". Valeurs acceptées : active, suggested, cancelled, finished");
         }
+        offer.setStatus(newStatus);
         OfferResponse result = OfferResponse.from(offerRepository.save(offer));
+
+        // When offer is manually closed → generate payment installments
+        if (newStatus == Offer.OfferStatus.finished
+                && offer.getPaymentMethod() != Offer.PaymentMethod.free) {
+            paymentService.generatePaymentsForOffer(id);
+        }
+
         User user = userRepository.findByEmail(email).orElse(null);
         logService.log(ActivityLogService.OFFER_STATUS, user,
             "\"" + offer.getTitle() + "\" : "
             + oldStatus + " → " + status);
         return result;
+    }
+
+
+    // ── Helper: save allowed payment methods ──────────────────────────────
+    private void saveAllowedMethods(Offer offer,
+            java.util.List<String> methods,
+            tn.star.star_api.entity.Offer.PaymentMethod pm) {
+        if (methods != null && !methods.isEmpty()) {
+            try {
+                offer.setAllowedPaymentMethods(
+                    new com.fasterxml.jackson.databind.ObjectMapper()
+                        .writeValueAsString(methods));
+            } catch (Exception ignored) {}
+        } else if (pm == tn.star.star_api.entity.Offer.PaymentMethod.free) {
+            offer.setAllowedPaymentMethods("[\"free\"]");
+        }
+    }
+    // ── Called by scheduler — closes expired offers and generates payments ──
+    public void closeExpiredOffer(Offer offer) {
+        offer.setStatus(Offer.OfferStatus.finished);
+        offerRepository.save(offer);
+        if (offer.getPaymentMethod() != Offer.PaymentMethod.free) {
+            paymentService.generatePaymentsForOffer(offer.getId());
+        }
+        logService.log(ActivityLogService.OFFER_STATUS, null,
+            "\"" + offer.getTitle() + "\" : active → finished (expiration automatique)");
     }
 
     // ── Delete offer + registrations + images ─────────────
@@ -262,30 +299,14 @@ public class OfferService {
         String title    = offer.getTitle();
         String category = offer.getCategory() != null
             ? offer.getCategory().getName() : "";
-        // Delete registrations first
+        // Delete registrations first (FK constraint)
         registrationRepository.deleteByOfferId(id);
-        // Delete offer
+        // Delete offer — images stored as BYTEA are deleted automatically
         offerRepository.deleteById(id);
-        // Delete image folder
-        deleteOfferImageFolder(id.toString());
         // Log with real user
         User user = userRepository.findByEmail(email).orElse(null);
         logService.log(ActivityLogService.OFFER_DELETED, user,
             "\"" + title + "\" — catégorie: " + category);
     }
 
-    private void deleteOfferImageFolder(String offerId) {
-        try {
-            Path offerImgPath = Paths.get(uploadDir, offerId)
-                .toAbsolutePath().normalize();
-            if (Files.exists(offerImgPath)) {
-                Files.walk(offerImgPath)
-                    .sorted(Comparator.reverseOrder())
-                    .forEach(p -> {
-                        try { Files.delete(p); }
-                        catch (IOException ignored) {}
-                    });
-            }
-        } catch (Exception ignored) {}
-    }
 }

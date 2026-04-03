@@ -38,7 +38,7 @@ public class Elections {
 
     @Enumerated(EnumType.STRING)
     @JdbcTypeCode(SqlTypes.NAMED_ENUM)
-    @Column(nullable = false)
+    @Column(nullable = false, columnDefinition = "election_status")
     private ElectionStatus status = ElectionStatus.candidatures;
 
     @ManyToOne

@@ -3,6 +3,7 @@ package tn.star.star_api.dto;
 import jakarta.validation.constraints.*;
 import lombok.Data;
 import tn.star.star_api.entity.User;
+import java.util.List;
 
 @Data
 public class CreateUserRequest {
@@ -33,7 +34,16 @@ public class CreateUserRequest {
     @NotNull(message = "Le rôle est obligatoire")
     private User.UserRole role;
 
-    // Only required when role = association_member
-    // Must be one of the 12 fixed categories (1-12)
+    // Required when role = association_member
+    // Can provide one or multiple categories (kept for backward compat)
     private Integer categoryId;
+
+    // Multiple categories — member can be responsible for several
+    private List<Integer> categoryIds;
+
+    public List<Integer> getEffectiveCategoryIds() {
+        if (categoryIds != null && !categoryIds.isEmpty()) return categoryIds;
+        if (categoryId  != null) return List.of(categoryId);
+        return List.of();
+    }
 }

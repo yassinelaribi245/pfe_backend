@@ -1,167 +1,156 @@
 package tn.star.star_api.controller;
 
-import org.springframework.beans.factory.annotation.Value;
-import org.springframework.core.io.Resource;
-import org.springframework.core.io.UrlResource;
-import org.springframework.http.HttpHeaders;
-import org.springframework.http.MediaType;
-import org.springframework.http.ResponseEntity;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import lombok.RequiredArgsConstructor;
+import org.springframework.http.*;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
-import org.springframework.web.multipart.MultipartFile;
+import tn.star.star_api.entity.Offer;
+import tn.star.star_api.repository.OfferRepository;
 
-import java.io.IOException;
-import java.net.MalformedURLException;
-import java.nio.file.*;
 import java.util.*;
 
 @RestController
 @RequestMapping("/api/images")
+@RequiredArgsConstructor
 public class ImageController {
 
-    @Value("${app.upload.dir:uploads/offers}")
-    private String uploadDir;
+    private final OfferRepository offerRepository;
+    private final ObjectMapper    mapper = new ObjectMapper();
 
-    // ── POST multipart (normal) ───────────────────────────
-    @PostMapping("/upload")
-    public ResponseEntity<?> uploadImages(
-            @RequestParam("files") List<MultipartFile> files,
-            @RequestParam(value = "offerId",
-                defaultValue = "temp") String offerId) {
-        return saveFiles(files, offerId);
-    }
-
-    // ── POST base64 JSON (Cloudflare-safe fallback) ───────
-    // Body: { "offerId": "temp", "files": [ { "name": "x.jpg", "data": "base64..." } ] }
+    // ── POST /api/images/upload-base64 ────────────────────────────────────
+    // Body : { "offerId": "uuid-or-temp",
+    //          "files": [{"name":"x.jpg", "data":"base64..."}] }
+    //
+    // Validates files and returns both placeholder URLs AND the raw base64
+    // so Flutter can embed them directly in the offer create/update body.
     @PostMapping("/upload-base64")
     public ResponseEntity<?> uploadBase64(
             @RequestBody Map<String, Object> body) {
         try {
             String offerId = (String) body.getOrDefault("offerId", "temp");
-            Path offerPath = Paths.get(uploadDir, offerId)
-                    .toAbsolutePath().normalize();
-            Files.createDirectories(offerPath);
 
-            List<?> files = (List<?>) body.get("files");
+            @SuppressWarnings("unchecked")
+            List<Map<String, String>> files =
+                (List<Map<String, String>>) body.get("files");
+
             if (files == null || files.isEmpty()) {
                 return ResponseEntity.badRequest().body(
                     Map.of("message", "Aucun fichier fourni"));
             }
 
-            List<String> urls = new ArrayList<>();
-            for (Object f : files) {
-                @SuppressWarnings("unchecked")
-                Map<String, String> file = (Map<String, String>) f;
-                String name   = file.getOrDefault("name", "image.jpg");
-                String data   = file.get("data"); // base64 string
+            // Validate each file size (max 5 MB)
+            for (Map<String, String> f : files) {
+                String data = f.get("data");
                 if (data == null) continue;
-
-                // Strip data URI prefix if present
                 if (data.contains(",")) data = data.split(",")[1];
-
-                byte[] bytes = Base64.getDecoder().decode(data);
-                if (bytes.length > 5 * 1024 * 1024) {
+                byte[] decoded = Base64.getDecoder().decode(data);
+                if (decoded.length > 5 * 1024 * 1024) {
                     return ResponseEntity.badRequest().body(
-                        Map.of("message", "Max 5MB par image"));
+                        Map.of("message", "Max 5MB par image — "
+                            + f.getOrDefault("name", "fichier")
+                            + " depasse la limite"));
                 }
-
-                String ext      = getExtension(name);
-                String filename = UUID.randomUUID() + "." + ext;
-                Files.write(offerPath.resolve(filename), bytes);
-                urls.add("/api/images/" + offerId + "/" + filename);
             }
 
-            return ResponseEntity.ok(Map.of("urls", urls));
+            // Return placeholder URLs + raw base64 list for Flutter to embed
+            // directly into OfferRequest.coverImage / OfferRequest.images
+            List<String> urls = new ArrayList<>();
+            List<String> b64s = new ArrayList<>();
 
-        } catch (IOException e) {
+            for (int i = 0; i < files.size(); i++) {
+                b64s.add(files.get(i).getOrDefault("data", ""));
+                if (i == 0) {
+                    urls.add("/api/images/" + offerId + "/cover");
+                } else {
+                    urls.add("/api/images/" + offerId + "/gallery/" + (i - 1));
+                }
+            }
+
+            return ResponseEntity.ok(Map.of(
+                "urls",   urls,
+                "base64", b64s,  // Flutter must pass these into coverImage/images
+                "files",  files  // kept for backward compatibility
+            ));
+
+        } catch (Exception e) {
             return ResponseEntity.internalServerError().body(
-                Map.of("message", "Erreur: " + e.getMessage()));
+                Map.of("message", "Erreur upload: " + e.getMessage()));
         }
     }
 
-    // ── GET /api/images/{offerId}/{filename} ──────────────
-    @GetMapping("/{offerId}/{filename:.+}")
-    public ResponseEntity<Resource> serveImage(
+    // ── GET /api/images/{offerId}/cover ───────────────────────────────────
+    @Transactional(readOnly = true)
+    @GetMapping("/{offerId}/cover")
+    public ResponseEntity<byte[]> getCover(
+            @PathVariable String offerId) {
+
+        UUID id = parseUuid(offerId);
+        if (id == null) return ResponseEntity.notFound().build();
+
+        Offer offer = offerRepository.findById(id).orElse(null);
+        if (offer == null) return ResponseEntity.notFound().build();
+
+        byte[] data = offer.getCoverImage();
+        if (data == null || data.length == 0)
+            return ResponseEntity.notFound().build();
+
+        String ct = offer.getCoverImageType() != null
+            ? offer.getCoverImageType() : "image/jpeg";
+
+        return ResponseEntity.ok()
+            .contentType(MediaType.parseMediaType(ct))
+            .cacheControl(CacheControl.maxAge(java.time.Duration.ofHours(1)))
+            .body(data);
+    }
+
+    // ── GET /api/images/{offerId}/gallery/{index} ─────────────────────────
+    @Transactional(readOnly = true)
+    @GetMapping("/{offerId}/gallery/{index}")
+    public ResponseEntity<byte[]> getGalleryImage(
             @PathVariable String offerId,
-            @PathVariable String filename) {
+            @PathVariable int index) {
+
+        UUID id = parseUuid(offerId);
+        if (id == null) return ResponseEntity.notFound().build();
+
+        Offer offer = offerRepository.findById(id).orElse(null);
+        if (offer == null || offer.getImages() == null)
+            return ResponseEntity.notFound().build();
+
         try {
-            Path filePath = Paths.get(uploadDir, offerId, filename)
-                    .toAbsolutePath().normalize();
-            Resource resource = new UrlResource(filePath.toUri());
+            @SuppressWarnings("unchecked")
+            List<String> images = mapper.readValue(offer.getImages(), List.class);
+            @SuppressWarnings("unchecked")
+            List<String> types = offer.getImagesTypes() != null
+                ? mapper.readValue(offer.getImagesTypes(), List.class)
+                : Collections.emptyList();
 
-            if (!resource.exists() || !resource.isReadable()) {
+            if (index < 0 || index >= images.size())
                 return ResponseEntity.notFound().build();
-            }
 
-            String contentType = Files.probeContentType(filePath);
-            if (contentType == null) contentType = "image/jpeg";
+            String b64 = images.get(index);
+            if (b64.contains(",")) b64 = b64.split(",")[1];
+            byte[] bytes = Base64.getDecoder().decode(b64);
+
+            String ct = index < types.size()
+                ? types.get(index) : "image/jpeg";
 
             return ResponseEntity.ok()
-                .contentType(MediaType.parseMediaType(contentType))
-                .header(HttpHeaders.CACHE_CONTROL, "no-store")
-                .body(resource);
+                .contentType(MediaType.parseMediaType(ct))
+                .cacheControl(CacheControl.maxAge(java.time.Duration.ofHours(1)))
+                .body(bytes);
 
-        } catch (MalformedURLException e) {
-            return ResponseEntity.badRequest().build();
-        } catch (IOException e) {
+        } catch (Exception e) {
+            System.err.println("Gallery image error [" + offerId
+                + "/" + index + "]: " + e.getMessage());
             return ResponseEntity.internalServerError().build();
         }
     }
 
-    // ── DELETE folder for an offer ────────────────────────
-    @DeleteMapping("/{offerId}")
-    public ResponseEntity<?> deleteOfferImages(
-            @PathVariable String offerId) {
-        try {
-            Path offerPath = Paths.get(uploadDir, offerId)
-                    .toAbsolutePath().normalize();
-            deleteDirectory(offerPath);
-            return ResponseEntity.ok(Map.of("message", "Supprimé"));
-        } catch (IOException e) {
-            return ResponseEntity.internalServerError().body(
-                Map.of("message", "Erreur: " + e.getMessage()));
-        }
-    }
-
-    private ResponseEntity<?> saveFiles(
-            List<MultipartFile> files, String offerId) {
-        try {
-            Path offerPath = Paths.get(uploadDir, offerId)
-                    .toAbsolutePath().normalize();
-            Files.createDirectories(offerPath);
-            List<String> urls = new ArrayList<>();
-            for (MultipartFile file : files) {
-                String ct = file.getContentType();
-                if (ct == null || !ct.startsWith("image/"))
-                    return ResponseEntity.badRequest().body(
-                        Map.of("message", "Images uniquement"));
-                if (file.getSize() > 5 * 1024 * 1024)
-                    return ResponseEntity.badRequest().body(
-                        Map.of("message", "Max 5MB"));
-                String ext  = getExtension(
-                    file.getOriginalFilename());
-                String name = UUID.randomUUID() + "." + ext;
-                Files.copy(file.getInputStream(),
-                    offerPath.resolve(name),
-                    StandardCopyOption.REPLACE_EXISTING);
-                urls.add("/api/images/" + offerId + "/" + name);
-            }
-            return ResponseEntity.ok(Map.of("urls", urls));
-        } catch (IOException e) {
-            return ResponseEntity.internalServerError().body(
-                Map.of("message", "Erreur: " + e.getMessage()));
-        }
-    }
-
-    private void deleteDirectory(Path path) throws IOException {
-        if (!Files.exists(path)) return;
-        Files.walk(path).sorted(Comparator.reverseOrder())
-            .forEach(p -> { try { Files.delete(p); }
-                catch (IOException ignored) {} });
-    }
-
-    private String getExtension(String filename) {
-        if (filename == null || !filename.contains(".")) return "jpg";
-        return filename.substring(
-            filename.lastIndexOf(".") + 1).toLowerCase();
+    // ── Helper ────────────────────────────────────────────────────────────
+    private UUID parseUuid(String s) {
+        try { return UUID.fromString(s); }
+        catch (Exception e) { return null; }
     }
 }

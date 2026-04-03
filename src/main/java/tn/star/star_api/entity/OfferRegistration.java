@@ -6,6 +6,7 @@ import lombok.NoArgsConstructor;
 import lombok.AllArgsConstructor;
 import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
+
 import java.time.OffsetDateTime;
 import java.util.UUID;
 
@@ -32,12 +33,19 @@ public class OfferRegistration {
     @Column(nullable = false)
     private OffsetDateTime date = OffsetDateTime.now();
 
+    // The payment method the user chose at registration time
+    @Column(name = "chosen_payment_method", length = 20)
+    private String chosenPaymentMethod;
+
     @Enumerated(EnumType.STRING)
     @JdbcTypeCode(SqlTypes.NAMED_ENUM)
-    @Column(nullable = false)
+    @Column(nullable = false, columnDefinition = "registration_status")
     private RegistrationStatus status = RegistrationStatus.confirmed;
 
     public enum RegistrationStatus {
-        confirmed, cancelled, waitlist
+        confirmed,
+        cancelled,
+        waitlist,
+        pending_approval   // user has overdue payments — waiting for member decision
     }
 }

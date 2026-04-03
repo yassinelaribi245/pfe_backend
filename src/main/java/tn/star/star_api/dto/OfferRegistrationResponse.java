@@ -13,10 +13,12 @@ public class OfferRegistrationResponse {
     private UUID   id;
     private String userName;
     private String userEmail;
+    private UUID   offerId;
     private String offerTitle;
     private String offerCategory;
     private String status;
-    private String statusMessage;  // clear message for the user
+    private String statusMessage;
+    private String chosenPaymentMethod;  // the method the user chose at registration
     private OffsetDateTime registeredAt;
 
     public static OfferRegistrationResponse from(OfferRegistration r) {
@@ -29,6 +31,10 @@ public class OfferRegistrationResponse {
                     + "vous serez notifié si une place se libère 🕐";
             case cancelled ->
                 message = "Inscription annulée";
+            case pending_approval ->
+                message = "Inscription en attente d\'approbation — "
+                    + "vous avez un paiement en retard sur une autre offre. "
+                    + "Le responsable examinera votre demande. 🕐";
             default ->
                 message = "";
         }
@@ -37,11 +43,13 @@ public class OfferRegistrationResponse {
             r.getId(),
             r.getUser().getName() + " " + r.getUser().getLastName(),
             r.getUser().getEmail(),
+            r.getOffer().getId(),
             r.getOffer().getTitle(),
             r.getOffer().getCategory() != null
                 ? r.getOffer().getCategory().getName() : null,
             r.getStatus().name(),
             message,
+            r.getChosenPaymentMethod(),
             r.getDate()
         );
     }

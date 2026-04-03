@@ -20,9 +20,9 @@ import java.util.Map;
 @RequiredArgsConstructor
 public class AuthController {
 
-    private final UserRepository    userRepository;
-    private final PasswordEncoder   passwordEncoder;
-    private final JwtUtil           jwtUtil;
+    private final UserRepository     userRepository;
+    private final PasswordEncoder    passwordEncoder;
+    private final JwtUtil            jwtUtil;
     private final ActivityLogService logService;
 
     @PostMapping("/login")
@@ -35,7 +35,6 @@ public class AuthController {
 
         if (user == null || !passwordEncoder.matches(
                 request.getPassword(), user.getPassword())) {
-            // Log failed attempt (user might be null so pass null)
             if (user != null) {
                 logService.log(ActivityLogService.LOGIN_FAILED, user,
                     "Email: " + request.getEmail()
@@ -53,7 +52,6 @@ public class AuthController {
         String token = jwtUtil.generateToken(
                 user.getEmail(), user.getRole().name());
 
-        // Log successful login
         logService.log(ActivityLogService.LOGIN_SUCCESS, user,
             "Rôle: " + user.getRole().name()
             + " — IP: " + getIp(httpRequest));
@@ -62,7 +60,8 @@ public class AuthController {
                 token,
                 user.getEmail(),
                 user.getName() + " " + user.getLastName(),
-                user.getRole().name()
+                user.getRole().name(),
+                user.getId()   // ← now included
         ));
     }
 

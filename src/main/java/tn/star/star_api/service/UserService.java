@@ -50,18 +50,18 @@ public class UserService {
         }
 
         if (req.getRole() == User.UserRole.association_member) {
-            if (req.getCategoryId() == null) {
+            if (req.getEffectiveCategoryIds().isEmpty()) {
                 throw new RuntimeException(
-                    "Un membre association doit avoir une catégorie assignée");
+                    "Un membre association doit avoir au moins une catégorie assignée");
             }
-            OfferCategory category = categoryRepository
-                    .findById(req.getCategoryId())
-                    .orElseThrow(() -> new RuntimeException(
-                        "Catégorie introuvable"));
-            if (memberRepository.existsByCategoryId(req.getCategoryId())) {
-                throw new RuntimeException(
-                    "La catégorie \"" + category.getName()
-                    + "\" est déjà assignée à un autre membre");
+            for (Integer catId : req.getEffectiveCategoryIds()) {
+                categoryRepository.findById(catId)
+                    .orElseThrow(() -> new RuntimeException("Catégorie introuvable"));
+                long count = memberRepository.countByCategoryId(catId);
+                if (count >= 4) {
+                    throw new RuntimeException(
+                        "Une catégorie choisie a déjà 4 membres — limite atteinte");
+                }
             }
         }
 
@@ -76,12 +76,13 @@ public class UserService {
         User saved = userRepository.save(user);
 
         if (req.getRole() == User.UserRole.association_member) {
-            OfferCategory category = categoryRepository
-                    .findById(req.getCategoryId()).get();
-            AssociationMember member = new AssociationMember();
-            member.setUser(saved);
-            member.setCategory(category);
-            memberRepository.save(member);
+            for (Integer catId : req.getEffectiveCategoryIds()) {
+                OfferCategory category = categoryRepository.findById(catId).get();
+                AssociationMember member = new AssociationMember();
+                member.setUser(saved);
+                member.setCategory(category);
+                memberRepository.save(member);
+            }
         }
 
         logService.log(ActivityLogService.USER_CREATED, saved,
@@ -124,48 +125,52 @@ public class UserService {
                 "L'utilisateur a déjà ce rôle");
         }
 
-        // ── Leaving association_member → free their category ──
+        // ── Leaving association_member → remove all their memberships ──
         if (oldRole == User.UserRole.association_member) {
-            memberRepository.findByUserId(id).ifPresent(m -> {
-                // Their offers stay — just remove the member record
-                // Offers will have createdBy pointing to deleted member
-                // but category stays so next member can manage them
-                memberRepository.delete(m);
-            });
+            memberRepository.findByUserId(id)
+                    .forEach(memberRepository::delete);
         }
 
-        // ── Becoming association_member → need a free category ──
+        // ── Becoming association_member → assign one or more categories ──
         if (newRole == User.UserRole.association_member) {
-            if (req.getCategoryId() == null) {
+            List<Integer> catIds = req.getEffectiveCategoryIds();
+            if (catIds.isEmpty()) {
                 throw new RuntimeException(
-                    "Vous devez choisir une catégorie pour ce membre");
+                    "Vous devez choisir au moins une catégorie pour ce membre");
             }
-            OfferCategory category = categoryRepository
-                    .findById(req.getCategoryId())
-                    .orElseThrow(() -> new RuntimeException(
-                        "Catégorie introuvable"));
-
-            if (memberRepository.existsByCategoryId(req.getCategoryId())) {
-                throw new RuntimeException(
-                    "La catégorie \"" + category.getName()
-                    + "\" est déjà assignée à un autre membre. "
-                    + "Retirez d'abord ce membre de sa catégorie.");
+            // Validate all categories and check limits
+            List<OfferCategory> categories = new java.util.ArrayList<>();
+            for (Integer catId : catIds) {
+                OfferCategory cat = categoryRepository.findById(catId)
+                    .orElseThrow(() -> new RuntimeException("Catégorie introuvable"));
+                long count = memberRepository.countByCategoryId(catId);
+                if (count >= 4) {
+                    throw new RuntimeException(
+                        "La catégorie \"" + cat.getName()
+                        + "\" a déjà 4 membres — limite atteinte");
+                }
+                categories.add(cat);
             }
 
             // Update role first
             user.setRole(newRole);
             User saved = userRepository.save(user);
 
-            // Create member record
-            AssociationMember member = new AssociationMember();
-            member.setUser(saved);
-            member.setCategory(category);
-            memberRepository.save(member);
+            // Create one AssociationMember record per category
+            for (OfferCategory cat : categories) {
+                AssociationMember member = new AssociationMember();
+                member.setUser(saved);
+                member.setCategory(cat);
+                memberRepository.save(member);
+            }
 
+            String catNames = categories.stream()
+                .map(OfferCategory::getName)
+                .collect(java.util.stream.Collectors.joining(", "));
             logService.log(ActivityLogService.ROLE_CHANGED, saved,
                 saved.getName() + " " + saved.getLastName()
                 + " : " + oldRole.name() + " → " + newRole.name()
-                + " — catégorie: " + category.getName());
+                + " — catégories: " + catNames);
             return UserResponse.from(saved);
         }
 
@@ -178,6 +183,55 @@ public class UserService {
         return result;
     }
 
+    // ── Add category responsibilities to an existing member ──────────
+    @Transactional
+    public UserResponse addResponsibilities(UUID id,
+            java.util.Map<String, Object> body) {
+
+        User user = userRepository.findById(id)
+                .orElseThrow(() -> new RuntimeException("Utilisateur introuvable"));
+
+        if (user.getRole() != User.UserRole.association_member) {
+            throw new RuntimeException(
+                "Seuls les membres association peuvent avoir des responsabilités");
+        }
+
+        @SuppressWarnings("unchecked")
+        List<Integer> catIds = (List<Integer>) body.get("categoryIds");
+        if (catIds == null || catIds.isEmpty()) {
+            throw new RuntimeException("Aucune catégorie fournie");
+        }
+
+        List<String> added = new java.util.ArrayList<>();
+        for (Integer catId : catIds) {
+            OfferCategory cat = categoryRepository.findById(catId)
+                .orElseThrow(() -> new RuntimeException("Catégorie introuvable"));
+
+            // Skip if already responsible for this category
+            if (memberRepository.existsByUserIdAndCategoryId(id, catId)) continue;
+
+            long count = memberRepository.countByCategoryId(catId);
+            if (count >= 4) {
+                throw new RuntimeException(
+                    "La catégorie \"" + cat.getName()
+                    + "\" a déjà 4 membres — limite atteinte");
+            }
+
+            AssociationMember member = new AssociationMember();
+            member.setUser(user);
+            member.setCategory(cat);
+            memberRepository.save(member);
+            added.add(cat.getName());
+        }
+
+        logService.log(ActivityLogService.ROLE_CHANGED, user,
+            user.getName() + " " + user.getLastName()
+            + " — nouvelles responsabilités: "
+            + String.join(", ", added));
+
+        return UserResponse.from(user);
+    }
+
     // ── Delete user ───────────────────────────────────────
     @Transactional
     public void deleteUser(UUID id) {
@@ -185,10 +239,10 @@ public class UserService {
                 .orElseThrow(() -> new RuntimeException(
                     "Utilisateur introuvable"));
 
-        // If member — free their category first
+        // If member — remove all their category memberships
         if (user.getRole() == User.UserRole.association_member) {
             memberRepository.findByUserId(id)
-                    .ifPresent(memberRepository::delete);
+                    .forEach(memberRepository::delete);
         }
 
         String fullName = user.getName() + " " + user.getLastName();

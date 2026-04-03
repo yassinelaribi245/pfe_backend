@@ -18,9 +18,12 @@ public class OfferRegistrationController {
     // Any logged-in user registers to an offer
     @PostMapping("/{id}/register")
     public ResponseEntity<?> register(@PathVariable UUID id,
-                                      Authentication auth) {
+                                      Authentication auth,
+                                      @RequestBody(required = false)
+                                          java.util.Map<String, String> body) {
+        String chosenMethod = body != null ? body.get("chosenPaymentMethod") : null;
         return ResponseEntity.ok(
-            registrationService.register(id, auth.getName()));
+            registrationService.register(id, auth.getName(), chosenMethod));
     }
 
     // DELETE /api/offers/{id}/register

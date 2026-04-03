@@ -36,8 +36,12 @@ public class OfferRequest {
     @Size(max = 255, message = "La description du document ne doit pas dépasser 255 caractères")
     private String documentNeeded;
 
-    @NotBlank(message = "Le mode de paiement est obligatoire")
-    private String paymentMethod;
+    @NotNull(message = "Le mode de paiement est obligatoire")
+    private tn.star.star_api.entity.Offer.PaymentMethod paymentMethod;
+
+    // List of allowed payment methods for this offer (e.g. ["full","months_3"])
+    // Defaults to ["free"] when paymentMethod is free
+    private List<String> allowedPaymentMethods;
 
     private String coverImage;  // URL after upload
     private List<String> images; // list of URLs after upload
